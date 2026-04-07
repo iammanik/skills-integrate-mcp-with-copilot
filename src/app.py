@@ -5,19 +5,28 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 import os
+import json
 from pathlib import Path
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
 
+# Add session middleware
+app.add_middleware(SessionMiddleware, secret_key="super-secret-key-change-in-production")
+
 # Mount the static files directory
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+
+# Load teachers
+with open(os.path.join(current_dir, "teachers.json")) as f:
+    teachers = json.load(f)["teachers"]
 
 # In-memory activity database
 activities = {
@@ -78,6 +87,32 @@ activities = {
 }
 
 
+def get_current_user(request: Request):
+    if not request.session.get("logged_in"):
+        raise HTTPException(status_code=403, detail="Not logged in")
+    return request.session["username"]
+
+
+@app.post("/login")
+def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    if username in teachers and teachers[username] == password:
+        request.session["logged_in"] = True
+        request.session["username"] = username
+        return {"message": "Logged in successfully"}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@app.post("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return {"message": "Logged out successfully"}
+
+
+@app.get("/auth/status")
+def auth_status(request: Request):
+    return {"logged_in": request.session.get("logged_in", False)}
+
+
 @app.get("/")
 def root():
     return RedirectResponse(url="/static/index.html")
@@ -89,8 +124,10 @@ def get_activities():
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(activity_name: str, email: str, request: Request):
     """Sign up a student for an activity"""
+    get_current_user(request)  # Only teachers can sign up
+
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -111,8 +148,10 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(activity_name: str, email: str, request: Request):
     """Unregister a student from an activity"""
+    get_current_user(request)  # Only teachers can unregister
+
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
